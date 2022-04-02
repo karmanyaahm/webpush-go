@@ -1,11 +1,11 @@
 package webpush
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/base64"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -15,12 +15,11 @@ import (
 )
 
 type testHTTPClient struct {
-	reqs []*http.Request
+	lastReq *http.Request
 }
 
 func (c *testHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	c.reqs = append(c.reqs, req)
-
+	c.lastReq = req
 	return &http.Response{StatusCode: 201}, nil
 }
 
@@ -105,23 +104,25 @@ func TestSendTooLargeNotification(t *testing.T) {
 }
 
 func TestKMGenKey(t *testing.T) {
-
 	mycurve := elliptic.P256()
 	priv, _ := ecdsa.GenerateKey(mycurve, rand.Reader)
 	pubkey := base64.StdEncoding.EncodeToString(elliptic.Marshal(mycurve, priv.X, priv.Y))
-	auth := []byte("1234567812345678")
+	auth := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} // 16 bytes long auth value buffer
+	_, _ = rand.Read(auth)
+
 	testHTTPC := &testHTTPClient{}
 
-	_, _ = SendNotification([]byte("HIII"), &Subscription{Endpoint: "http://example.com", Keys: Keys{P256dh: pubkey, Auth: base64.StdEncoding.EncodeToString(auth)}}, &Options{
+	payload, _ := io.ReadAll(io.LimitReader(rand.Reader, 3993)) // 3993 is max payload length that works to send notification
+	_, _ = SendNotification([]byte(payload), &Subscription{Endpoint: "http://example.com", Keys: Keys{P256dh: pubkey, Auth: base64.StdEncoding.EncodeToString(auth)}}, &Options{
 		HTTPClient: testHTTPC,
 	})
 
-	body, _ := io.ReadAll(testHTTPC.reqs[0].Body)
-	//fmt.Println(body)
+	body, _ := io.ReadAll(testHTTPC.lastReq.Body)
 
 	engine := ecego.NewEngine(ecego.SingleKey(priv), ecego.WithAuthSecret(auth))
-	ans, err := engine.Decrypt(body, []byte(""), ecego.OperationalParams{Salt: []byte("1234567812345678")})
-	fmt.Println(err)
-	fmt.Println(string(ans))
+	decoded, _ := engine.Decrypt(body, nil, ecego.OperationalParams{Salt: []byte("1234567812345678")}) // any salt, ecego will decode actual salt later
 
+	if !bytes.Equal(payload, decoded) {
+		t.Error("Wrong decode", payload, decoded)
+	}
 }
