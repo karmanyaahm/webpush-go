@@ -1,14 +1,26 @@
 package webpush
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/xakep666/ecego"
 )
 
-type testHTTPClient struct{}
+type testHTTPClient struct {
+	reqs []*http.Request
+}
 
-func (*testHTTPClient) Do(*http.Request) (*http.Response, error) {
+func (c *testHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	c.reqs = append(c.reqs, req)
+
 	return &http.Response{StatusCode: 201}, nil
 }
 
@@ -90,4 +102,26 @@ func TestSendTooLargeNotification(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Error is nil, expected=%s", ErrMaxPadExceeded)
 	}
+}
+
+func TestKMGenKey(t *testing.T) {
+
+	mycurve := elliptic.P256()
+	priv, _ := ecdsa.GenerateKey(mycurve, rand.Reader)
+	pubkey := base64.StdEncoding.EncodeToString(elliptic.Marshal(mycurve, priv.X, priv.Y))
+	auth := []byte("1234567812345678")
+	testHTTPC := &testHTTPClient{}
+
+	_, _ = SendNotification([]byte("HIII"), &Subscription{Endpoint: "http://example.com", Keys: Keys{P256dh: pubkey, Auth: base64.StdEncoding.EncodeToString(auth)}}, &Options{
+		HTTPClient: testHTTPC,
+	})
+
+	body, _ := io.ReadAll(testHTTPC.reqs[0].Body)
+	//fmt.Println(body)
+
+	engine := ecego.NewEngine(ecego.SingleKey(priv), ecego.WithAuthSecret(auth))
+	ans, err := engine.Decrypt(body, []byte(""), ecego.OperationalParams{Salt: []byte("1234567812345678")})
+	fmt.Println(err)
+	fmt.Println(string(ans))
+
 }
